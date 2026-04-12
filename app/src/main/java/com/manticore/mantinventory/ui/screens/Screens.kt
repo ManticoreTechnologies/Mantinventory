@@ -82,6 +82,7 @@ import com.manticore.mantinventory.data.BoxEntity
 import com.manticore.mantinventory.data.ItemEntity
 import com.manticore.mantinventory.ui.AppViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -356,17 +357,35 @@ private fun BoxDetailScreen(
     boxId: Long,
     onAddItem: () -> Unit
 ) {
-    val box by viewModel.boxDetail(boxId).collectAsStateWithLifecycle()
-    val items by viewModel.itemsForBox(boxId).collectAsStateWithLifecycle()
+    val boxStateFlow = remember(boxId) {
+        viewModel.boxDetail(boxId).map { box ->
+            if (box == null) {
+                BoxDetailUiState.NotFound
+            } else {
+                BoxDetailUiState.Loaded(box)
+            }
+        }
+    }
+    val itemsFlow = remember(boxId) { viewModel.itemsForBox(boxId) }
+    val boxState by boxStateFlow.collectAsStateWithLifecycle(initialValue = BoxDetailUiState.Loading)
+    val items by itemsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-
-    if (box == null) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Box not found")
+    val box = when (val state = boxState) {
+        BoxDetailUiState.Loading -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Loading box details…")
+            }
+            return
         }
-        return
+        BoxDetailUiState.NotFound -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Box not found")
+            }
+            return
+        }
+        is BoxDetailUiState.Loaded -> state.box
     }
 
     Scaffold(
@@ -385,15 +404,15 @@ private fun BoxDetailScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(box!!.name, style = MaterialTheme.typography.headlineSmall)
-            Text("Label code: ${box!!.labelCode}")
-            Text("Location: ${box!!.location.ifBlank { "Not set" }}")
-            Text("Description: ${box!!.description.ifBlank { "No description" }}")
-            Text("Created: ${formatDate(box!!.createdAt)}")
+            Text(box.name, style = MaterialTheme.typography.headlineSmall)
+            Text("Label code: ${box.labelCode}")
+            Text("Location: ${box.location.ifBlank { "Not set" }}")
+            Text("Description: ${box.description.ifBlank { "No description" }}")
+            Text("Created: ${formatDate(box.createdAt)}")
             LabelImageCard(
-                pngPath = box!!.labelPngPath,
+                pngPath = box.labelPngPath,
                 onShare = {
-                    val shared = shareLabel(context, box!!.labelPngPath)
+                    val shared = shareLabel(context, box.labelPngPath)
                     if (!shared) {
                         scope.launch { snackbar.showSnackbar("Label image not available.") }
                     }
@@ -409,6 +428,12 @@ private fun BoxDetailScreen(
             }
         }
     }
+}
+
+private sealed interface BoxDetailUiState {
+    data object Loading : BoxDetailUiState
+    data object NotFound : BoxDetailUiState
+    data class Loaded(val box: BoxEntity) : BoxDetailUiState
 }
 
 @Composable

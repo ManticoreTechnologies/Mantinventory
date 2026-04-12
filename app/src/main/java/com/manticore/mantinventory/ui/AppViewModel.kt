@@ -15,6 +15,7 @@ import com.manticore.mantinventory.data.MantinventoryDatabase
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -190,16 +191,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun boxDetail(boxId: Long): StateFlow<BoxEntity?> {
-        return repository.observeBoxWithItems(boxId)
-            .map { it?.box }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-    }
+    fun boxDetail(boxId: Long): Flow<BoxEntity?> =
+        repository.observeBoxWithItems(boxId).map { it?.box }
 
-    fun itemsForBox(boxId: Long): StateFlow<List<ItemEntity>> {
-        return repository.observeItemsForBox(boxId)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    }
+    fun itemsForBox(boxId: Long): Flow<List<ItemEntity>> =
+        repository.observeItemsForBox(boxId)
 
     fun updateSearchQuery(query: String) {
         searchQueryState.value = query
