@@ -422,7 +422,7 @@ private fun BoxDetailScreen(
             return
         }
         else -> boxUiState.box
-    }
+    } ?: return
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
