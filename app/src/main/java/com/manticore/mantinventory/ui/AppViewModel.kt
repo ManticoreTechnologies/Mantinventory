@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlin.math.max
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -190,6 +191,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             lastScanMessageState.value = "Item added to box"
         }
     }
+
+    fun adjustItemQuantity(itemId: Long, delta: Int) {
+        if (delta == 0) return
+        viewModelScope.launch {
+            repository.adjustItemQuantity(itemId = itemId, delta = delta)
+        }
+    }
+
+    fun incrementItemQuantity(itemId: Long) = adjustItemQuantity(itemId = itemId, delta = 1)
+
+    fun decrementItemQuantity(itemId: Long) = adjustItemQuantity(itemId = itemId, delta = -1)
 
     fun boxDetail(boxId: Long): Flow<BoxEntity?> =
         repository.observeBoxWithItems(boxId).map { it?.box }

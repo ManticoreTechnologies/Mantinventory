@@ -19,6 +19,17 @@ class InventoryRepository(
 
     suspend fun addItem(item: ItemEntity): Long = inventoryDao.insertItem(item)
 
+    suspend fun adjustItemQuantity(itemId: Long, delta: Int) {
+        val item = inventoryDao.getItemById(itemId) ?: return
+        val target = (item.quantity + delta).coerceAtLeast(1)
+        if (target == item.quantity) return
+        inventoryDao.updateItemQuantity(
+            itemId = itemId,
+            quantity = target,
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
     suspend fun findBoxByLabelCode(labelCode: String): BoxEntity? = inventoryDao.getBoxByLabelCode(labelCode)
 
     suspend fun findItemByBarcodeOrQr(barcodeOrQr: String): ItemEntity? =

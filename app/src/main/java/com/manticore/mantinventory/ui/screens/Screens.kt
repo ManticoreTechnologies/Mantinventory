@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -81,6 +82,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.manticore.mantinventory.data.BoxEntity
 import com.manticore.mantinventory.data.ItemEntity
 import com.manticore.mantinventory.ui.AppViewModel
+import com.manticore.mantinventory.ui.InventoryStats
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -234,6 +236,7 @@ private fun HomeScreen(
     onScan: () -> Unit
 ) {
     val boxes by viewModel.boxes.collectAsStateWithLifecycle()
+    val stats by viewModel.stats.collectAsStateWithLifecycle()
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     var query by remember(ui.searchQuery) { mutableStateOf(ui.searchQuery) }
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
@@ -264,6 +267,9 @@ private fun HomeScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            item {
+                StatsOverviewCard(stats = stats)
+            }
             item {
                 OutlinedTextField(
                     value = query,
@@ -303,6 +309,33 @@ private fun HomeScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StatsOverviewCard(stats: InventoryStats) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            StatsPill(label = "Boxes", value = stats.totalBoxes.toString())
+            StatsPill(label = "Items", value = stats.totalItems.toString())
+            StatsPill(label = "Low stock", value = stats.lowStockItems.toString())
+        }
+    }
+}
+
+@Composable
+private fun StatsPill(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(text = label, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -424,7 +457,11 @@ private fun BoxDetailScreen(
                 fontWeight = FontWeight.Bold
             )
             items.forEach { item ->
-                ItemCard(item = item)
+                ItemCard(
+                    item = item,
+                    onIncrement = { viewModel.incrementItemQuantity(item.id) },
+                    onDecrement = { viewModel.decrementItemQuantity(item.id) }
+                )
             }
         }
     }
@@ -474,14 +511,30 @@ private fun LabelImageCard(
 }
 
 @Composable
-private fun ItemCard(item: ItemEntity) {
+private fun ItemCard(
+    item: ItemEntity,
+    onIncrement: () -> Unit,
+    onDecrement: () -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(item.name, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(4.dp))
             Text(item.description.ifBlank { "No description" })
             Text("Barcode/QR: ${item.barcodeOrQr.ifBlank { "Not set" }}")
-            Text("Qty: ${item.quantity}")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Qty: ${item.quantity}", modifier = Modifier.weight(1f))
+                IconButton(onClick = onDecrement, enabled = item.quantity > 1) {
+                    Icon(Icons.Default.Remove, contentDescription = "Decrease quantity")
+                }
+                IconButton(onClick = onIncrement) {
+                    Icon(Icons.Default.Add, contentDescription = "Increase quantity")
+                }
+            }
             Text("Low stock threshold: ${item.minimumStock}")
             Text("Updated: ${formatDate(item.updatedAt)}")
         }
