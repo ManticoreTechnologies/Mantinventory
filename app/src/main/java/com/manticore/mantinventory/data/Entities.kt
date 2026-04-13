@@ -36,7 +36,7 @@ data class BoxEntity(
 )
 data class ItemEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    @ColumnInfo(index = true) val boxId: Long,
+    @ColumnInfo val boxId: Long,
     val name: String,
     val description: String,
     val quantity: Int = 1,
