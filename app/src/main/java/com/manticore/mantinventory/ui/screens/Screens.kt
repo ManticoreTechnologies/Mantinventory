@@ -33,7 +33,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
@@ -44,14 +48,17 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -82,14 +89,14 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.manticore.mantinventory.data.BoxEntity
 import com.manticore.mantinventory.data.ItemEntity
+import com.manticore.mantinventory.data.LabelGenerator
+import com.manticore.mantinventory.ui.BoxDetailUiState
 import com.manticore.mantinventory.ui.ItemMarketValueUiState
 import com.manticore.mantinventory.ui.AppViewModel
 import com.manticore.mantinventory.ui.InventoryStats
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -392,36 +399,30 @@ private fun BoxDetailScreen(
     boxId: Long,
     onAddItem: () -> Unit
 ) {
-    val boxStateFlow = remember(boxId) {
-        viewModel.boxDetail(boxId).map { box ->
-            if (box == null) {
-                BoxDetailUiState.NotFound
-            } else {
-                BoxDetailUiState.Loaded(box)
-            }
-        }
-    }
+    val boxUiStateFlow = remember(boxId) { viewModel.boxDetailUiState(boxId) }
     val itemsFlow = remember(boxId) { viewModel.itemsForBox(boxId) }
-    val boxState by boxStateFlow.collectAsStateWithLifecycle(initialValue = BoxDetailUiState.Loading)
+    val boxUiState by boxUiStateFlow.collectAsStateWithLifecycle(initialValue = BoxDetailUiState())
     val items by itemsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val box = when (val state = boxState) {
-        BoxDetailUiState.Loading -> {
+    var showEditDialogForItemId by remember(boxId) { mutableStateOf<Long?>(null) }
+
+    val box = when {
+        boxUiState.isLoading || !boxUiState.wasResolved -> {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Loading box details…")
             }
             return
         }
-        BoxDetailUiState.NotFound -> {
+        boxUiState.box == null -> {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Box not found")
             }
             return
         }
-        is BoxDetailUiState.Loaded -> state.box
-    }
+        else -> boxUiState.box
+    } ?: return
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -451,6 +452,12 @@ private fun BoxDetailScreen(
                     if (!shared) {
                         scope.launch { snackbar.showSnackbar("Label image not available.") }
                     }
+                },
+                onPrint = {
+                    val printed = printImage(context, box.labelPngPath, "${box.name} label")
+                    if (!printed) {
+                        scope.launch { snackbar.showSnackbar("Label image not available.") }
+                    }
                 }
             )
             Text(
@@ -464,23 +471,74 @@ private fun BoxDetailScreen(
                     marketEstimate = viewModel.marketEstimateForItem(item.id),
                     onIncrement = { viewModel.incrementItemQuantity(item.id) },
                     onDecrement = { viewModel.decrementItemQuantity(item.id) },
-                    onEstimateMarketValue = { viewModel.refreshMarketValueForItem(item) }
+                    onEstimateMarketValue = { viewModel.refreshMarketValueForItem(item) },
+                    onEditItem = { showEditDialogForItemId = item.id },
+                    onDeleteItem = {
+                        viewModel.deleteItem(item.id)
+                        scope.launch { snackbar.showSnackbar("Item deleted.") }
+                    },
+                    onPrintItemCode = {
+                        if (item.barcodeOrQr.isBlank()) {
+                            scope.launch {
+                                snackbar.showSnackbar("Item has no barcode/QR value to print.")
+                            }
+                        } else {
+                            val path = createItemBarcodeImage(
+                                context = context,
+                                item = item
+                            )
+                            val printed = printImage(context, path, "${item.name} barcode")
+                            if (!printed) {
+                                scope.launch { snackbar.showSnackbar("Unable to print item code.") }
+                            }
+                        }
+                    },
+                    onShareItemCode = {
+                        if (item.barcodeOrQr.isBlank()) {
+                            scope.launch {
+                                snackbar.showSnackbar("Item has no barcode/QR value to share.")
+                            }
+                        } else {
+                            val path = createItemBarcodeImage(
+                                context = context,
+                                item = item
+                            )
+                            val shared = shareLabel(context, path)
+                            if (!shared) {
+                                scope.launch { snackbar.showSnackbar("Unable to share item code.") }
+                            }
+                        }
+                    }
+                )
+            }
+            val editedItem = items.firstOrNull { it.id == showEditDialogForItemId }
+            if (editedItem != null) {
+                EditItemDialog(
+                    item = editedItem,
+                    onDismiss = { showEditDialogForItemId = null },
+                    onSave = { name, description, barcode, quantity, minimumStock ->
+                        viewModel.updateItem(
+                            itemId = editedItem.id,
+                            name = name,
+                            description = description,
+                            barcode = barcode,
+                            quantity = quantity,
+                            minimumStock = minimumStock
+                        )
+                        showEditDialogForItemId = null
+                        scope.launch { snackbar.showSnackbar("Item updated.") }
+                    }
                 )
             }
         }
     }
 }
 
-private sealed interface BoxDetailUiState {
-    data object Loading : BoxDetailUiState
-    data object NotFound : BoxDetailUiState
-    data class Loaded(val box: BoxEntity) : BoxDetailUiState
-}
-
 @Composable
 private fun LabelImageCard(
     pngPath: String,
-    onShare: () -> Unit
+    onShare: () -> Unit,
+    onPrint: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -507,8 +565,14 @@ private fun LabelImageCard(
             } else {
                 Text("Label image not available yet.")
             }
-            TextButton(onClick = onShare) {
-                Text("Share / print label")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onShare) {
+                    Text("Share label")
+                }
+                TextButton(onClick = onPrint) {
+                    Icon(Icons.Default.Print, contentDescription = null)
+                    Text("Print label")
+                }
             }
         }
     }
@@ -520,7 +584,11 @@ private fun ItemCard(
     marketEstimate: ItemMarketValueUiState?,
     onIncrement: () -> Unit,
     onDecrement: () -> Unit,
-    onEstimateMarketValue: () -> Unit
+    onEstimateMarketValue: () -> Unit,
+    onEditItem: () -> Unit,
+    onDeleteItem: () -> Unit,
+    onPrintItemCode: () -> Unit,
+    onShareItemCode: () -> Unit
 ) {
     LaunchedEffect(item.id, marketEstimate == null) {
         if (marketEstimate == null) {
@@ -534,6 +602,52 @@ private fun ItemCard(
             Spacer(modifier = Modifier.height(4.dp))
             Text(item.description.ifBlank { "No description" })
             Text("Barcode/QR: ${item.barcodeOrQr.ifBlank { "Not set" }}")
+            var menuExpanded by remember(item.id) { mutableStateOf(false) }
+            Box(modifier = Modifier.fillMaxWidth()) {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.align(Alignment.TopEnd)
+                ) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Item options")
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Edit item") },
+                        onClick = {
+                            menuExpanded = false
+                            onEditItem()
+                        },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Print code") },
+                        onClick = {
+                            menuExpanded = false
+                            onPrintItemCode()
+                        },
+                        leadingIcon = { Icon(Icons.Default.Print, contentDescription = null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Share code") },
+                        onClick = {
+                            menuExpanded = false
+                            onShareItemCode()
+                        },
+                        leadingIcon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete item") },
+                        onClick = {
+                            menuExpanded = false
+                            onDeleteItem()
+                        },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) }
+                    )
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -556,6 +670,72 @@ private fun ItemCard(
             MarketValueSection(estimate = marketEstimate)
         }
     }
+}
+
+@Composable
+private fun EditItemDialog(
+    item: ItemEntity,
+    onDismiss: () -> Unit,
+    onSave: (name: String, description: String, barcode: String, quantity: Int, minimumStock: Int) -> Unit
+) {
+    var name by remember(item.id) { mutableStateOf(item.name) }
+    var description by remember(item.id) { mutableStateOf(item.description) }
+    var barcode by remember(item.id) { mutableStateOf(item.barcodeOrQr) }
+    var quantityText by remember(item.id) { mutableStateOf(item.quantity.toString()) }
+    var minimumStockText by remember(item.id) { mutableStateOf(item.minimumStock.toString()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit item") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Item name") }
+                )
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Description") }
+                )
+                OutlinedTextField(
+                    value = barcode,
+                    onValueChange = { barcode = it },
+                    label = { Text("Barcode/QR") }
+                )
+                OutlinedTextField(
+                    value = quantityText,
+                    onValueChange = { quantityText = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Quantity") }
+                )
+                OutlinedTextField(
+                    value = minimumStockText,
+                    onValueChange = { minimumStockText = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Low stock threshold") }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSave(
+                        name.trim(),
+                        description.trim(),
+                        barcode.trim(),
+                        quantityText.toIntOrNull() ?: 1,
+                        minimumStockText.toIntOrNull() ?: 0
+                    )
+                },
+                enabled = name.isNotBlank()
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
 
 @Composable
@@ -863,6 +1043,36 @@ private fun shareLabel(context: Context, labelPath: String): Boolean {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(Intent.createChooser(share, "Share label"))
+    return true
+}
+
+private fun createItemBarcodeImage(context: Context, item: ItemEntity): String {
+    val safeName = item.name.ifBlank { "item_${item.id}" }
+        .replace("[^A-Za-z0-9_-]".toRegex(), "_")
+    val code = item.barcodeOrQr.trim()
+    val bitmap = LabelGenerator.generateQr(code)
+    val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+    val file = File(dir, "item_code_${safeName}_${item.id}.png")
+    FileOutputStream(file).use { output ->
+        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+    }
+    return file.absolutePath
+}
+
+private fun printImage(context: Context, imagePath: String, chooserTitle: String): Boolean {
+    val file = File(imagePath)
+    if (!file.exists()) return false
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
+    val printIntent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "image/png")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    val chooser = Intent.createChooser(printIntent, chooserTitle)
+    context.startActivity(chooser)
     return true
 }
 

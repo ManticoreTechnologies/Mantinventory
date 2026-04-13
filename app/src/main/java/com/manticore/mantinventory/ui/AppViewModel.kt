@@ -47,6 +47,12 @@ data class ItemMarketValueUiState(
     val errorMessage: String? = null
 )
 
+data class BoxDetailUiState(
+    val isLoading: Boolean = true,
+    val box: BoxEntity? = null,
+    val wasResolved: Boolean = false
+)
+
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: InventoryRepository
     private val marketValueEstimator = MarketValueEstimator()
@@ -213,6 +219,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun decrementItemQuantity(itemId: Long) = adjustItemQuantity(itemId = itemId, delta = -1)
 
+    fun updateItem(
+        itemId: Long,
+        name: String,
+        description: String,
+        barcode: String,
+        quantity: Int,
+        minimumStock: Int
+    ) {
+        viewModelScope.launch {
+            repository.updateItem(
+                itemId = itemId,
+                name = name.trim(),
+                description = description.trim(),
+                barcode = barcode.trim(),
+                quantity = quantity.coerceAtLeast(1),
+                minimumStock = minimumStock.coerceAtLeast(0)
+            )
+        }
+    }
+
+    fun deleteItem(itemId: Long) {
+        viewModelScope.launch {
+            repository.removeItemById(itemId)
+            itemMarketValuesState.value = itemMarketValuesState.value - itemId
+        }
+    }
+
     fun marketEstimateForItem(itemId: Long): ItemMarketValueUiState? =
         itemMarketValuesState.value[itemId]
 
@@ -256,6 +289,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun boxDetail(boxId: Long): Flow<BoxEntity?> =
         repository.observeBoxWithItems(boxId).map { it?.box }
+
+    fun boxDetailUiState(boxId: Long): Flow<BoxDetailUiState> =
+        repository.observeBoxWithItems(boxId)
+            .map { boxWithItems ->
+                BoxDetailUiState(
+                    isLoading = false,
+                    box = boxWithItems?.box,
+                    wasResolved = true
+                )
+            }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                BoxDetailUiState()
+            )
 
     fun itemsForBox(boxId: Long): Flow<List<ItemEntity>> =
         repository.observeItemsForBox(boxId)
