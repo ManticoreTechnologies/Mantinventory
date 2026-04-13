@@ -45,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -81,6 +82,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.manticore.mantinventory.data.BoxEntity
 import com.manticore.mantinventory.data.ItemEntity
+import com.manticore.mantinventory.ui.ItemMarketValueUiState
 import com.manticore.mantinventory.ui.AppViewModel
 import com.manticore.mantinventory.ui.InventoryStats
 import kotlinx.coroutines.Dispatchers
@@ -459,8 +461,10 @@ private fun BoxDetailScreen(
             items.forEach { item ->
                 ItemCard(
                     item = item,
+                    marketEstimate = viewModel.marketEstimateForItem(item.id),
                     onIncrement = { viewModel.incrementItemQuantity(item.id) },
-                    onDecrement = { viewModel.decrementItemQuantity(item.id) }
+                    onDecrement = { viewModel.decrementItemQuantity(item.id) },
+                    onEstimateMarketValue = { viewModel.refreshMarketValueForItem(item) }
                 )
             }
         }
@@ -513,9 +517,17 @@ private fun LabelImageCard(
 @Composable
 private fun ItemCard(
     item: ItemEntity,
+    marketEstimate: ItemMarketValueUiState?,
     onIncrement: () -> Unit,
-    onDecrement: () -> Unit
+    onDecrement: () -> Unit,
+    onEstimateMarketValue: () -> Unit
 ) {
+    LaunchedEffect(item.id, marketEstimate == null) {
+        if (marketEstimate == null) {
+            onEstimateMarketValue()
+        }
+    }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(item.name, fontWeight = FontWeight.Bold)
@@ -537,6 +549,47 @@ private fun ItemCard(
             }
             Text("Low stock threshold: ${item.minimumStock}")
             Text("Updated: ${formatDate(item.updatedAt)}")
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(onClick = onEstimateMarketValue) {
+                Text("Refresh market value")
+            }
+            MarketValueSection(estimate = marketEstimate)
+        }
+    }
+}
+
+@Composable
+private fun MarketValueSection(estimate: ItemMarketValueUiState?) {
+    if (estimate == null) {
+        Text("Market value: not estimated yet.", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    when {
+        estimate.isLoading -> {
+            Text("Market value: fetching latest sold comps…", style = MaterialTheme.typography.bodySmall)
+        }
+        !estimate.errorMessage.isNullOrBlank() -> {
+            Text(
+                "Market value unavailable: ${estimate.errorMessage}",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        else -> {
+            val resolved = estimate.estimate ?: run {
+                Text("Market value unavailable.", style = MaterialTheme.typography.bodySmall)
+                return
+            }
+            val median = formatMoney(resolved.medianPrice, resolved.currencyCode)
+            val low = formatMoney(resolved.minPrice, resolved.currencyCode)
+            val high = formatMoney(resolved.maxPrice, resolved.currencyCode)
+            Text(
+                "Market value (sold): median $median | range $low - $high (${resolved.sampleCount} comps)",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "Source: ${resolved.source}",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
@@ -815,4 +868,8 @@ private fun shareLabel(context: Context, labelPath: String): Boolean {
 
 private fun formatDate(epochMillis: Long): String {
     return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(epochMillis))
+}
+
+private fun formatMoney(value: Double, currencyCode: String): String {
+    return "$currencyCode " + String.format(Locale.US, "%.2f", value)
 }
