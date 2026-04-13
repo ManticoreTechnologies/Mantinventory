@@ -19,6 +19,27 @@ class InventoryRepository(
 
     suspend fun addItem(item: ItemEntity): Long = inventoryDao.insertItem(item)
 
+    suspend fun updateItem(
+        itemId: Long,
+        name: String,
+        description: String,
+        barcode: String,
+        quantity: Int,
+        minimumStock: Int
+    ) {
+        inventoryDao.updateItem(
+            itemId = itemId,
+            name = name,
+            description = description,
+            barcodeOrQr = barcode,
+            quantity = quantity.coerceAtLeast(1),
+            minimumStock = minimumStock.coerceAtLeast(0),
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
+    suspend fun removeItemById(itemId: Long) = inventoryDao.deleteItem(itemId)
+
     suspend fun adjustItemQuantity(itemId: Long, delta: Int) {
         if (delta == 0) return
         inventoryDao.adjustItemQuantity(

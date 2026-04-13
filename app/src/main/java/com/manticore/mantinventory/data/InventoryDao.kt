@@ -28,6 +28,31 @@ interface InventoryDao {
     )
     suspend fun adjustItemQuantity(itemId: Long, delta: Int, updatedAt: Long)
 
+    @Query(
+        """
+        UPDATE items
+        SET name = :name,
+            description = :description,
+            barcodeOrQr = :barcodeOrQr,
+            quantity = :quantity,
+            minimumStock = :minimumStock,
+            updatedAt = :updatedAt
+        WHERE id = :itemId
+        """
+    )
+    suspend fun updateItem(
+        itemId: Long,
+        name: String,
+        description: String,
+        barcodeOrQr: String,
+        quantity: Int,
+        minimumStock: Int,
+        updatedAt: Long
+    )
+
+    @Query("DELETE FROM items WHERE id = :itemId")
+    suspend fun deleteItem(itemId: Long)
+
     @Transaction
     @Query("SELECT * FROM boxes ORDER BY createdAt DESC")
     fun observeBoxesWithItems(): Flow<List<BoxWithItems>>
