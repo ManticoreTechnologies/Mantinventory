@@ -78,6 +78,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jsoup:jsoup:1.22.1")
 
     implementation("androidx.camera:camera-camera2:1.4.0-beta02")
     implementation("androidx.camera:camera-lifecycle:1.4.0-beta02")

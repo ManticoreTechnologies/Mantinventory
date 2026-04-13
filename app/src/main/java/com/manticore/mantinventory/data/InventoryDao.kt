@@ -15,6 +15,19 @@ interface InventoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertItem(item: ItemEntity): Long
 
+    @Query(
+        """
+        UPDATE items
+        SET quantity = CASE
+            WHEN quantity + :delta < 1 THEN 1
+            ELSE quantity + :delta
+        END,
+        updatedAt = :updatedAt
+        WHERE id = :itemId
+        """
+    )
+    suspend fun adjustItemQuantity(itemId: Long, delta: Int, updatedAt: Long)
+
     @Transaction
     @Query("SELECT * FROM boxes ORDER BY createdAt DESC")
     fun observeBoxesWithItems(): Flow<List<BoxWithItems>>

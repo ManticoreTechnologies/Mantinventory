@@ -12,9 +12,12 @@ import com.manticore.mantinventory.data.InventoryRepository
 import com.manticore.mantinventory.data.ItemEntity
 import com.manticore.mantinventory.data.LabelGenerator
 import com.manticore.mantinventory.data.MantinventoryDatabase
+import com.manticore.mantinventory.data.MarketValueEstimate
+import com.manticore.mantinventory.data.MarketValueEstimator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -38,8 +41,15 @@ data class AppUiState(
     val lastScannedItemCode: String? = null
 )
 
+data class ItemMarketValueUiState(
+    val isLoading: Boolean = false,
+    val estimate: MarketValueEstimate? = null,
+    val errorMessage: String? = null
+)
+
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: InventoryRepository
+    private val marketValueEstimator = MarketValueEstimator()
 
     private val searchQueryState = MutableStateFlow("")
     private val lastScanMessageState = MutableStateFlow("")
@@ -48,6 +58,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val pendingDeepLinkState = MutableStateFlow<String?>(null)
     val pendingDeepLink: StateFlow<String?> = pendingDeepLinkState
+    private val itemMarketValuesState = MutableStateFlow<Map<Long, ItemMarketValueUiState>>(emptyMap())
+    val itemMarketValues: StateFlow<Map<Long, ItemMarketValueUiState>> = itemMarketValuesState
 
     val boxes: StateFlow<List<BoxWithItems>>
     val searchResults: StateFlow<List<ItemEntity>>
@@ -190,16 +202,63 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun boxDetail(boxId: Long): StateFlow<BoxEntity?> {
-        return repository.observeBoxWithItems(boxId)
-            .map { it?.box }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    fun adjustItemQuantity(itemId: Long, delta: Int) {
+        if (delta == 0) return
+        viewModelScope.launch {
+            repository.adjustItemQuantity(itemId = itemId, delta = delta)
+        }
     }
 
-    fun itemsForBox(boxId: Long): StateFlow<List<ItemEntity>> {
-        return repository.observeItemsForBox(boxId)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    fun incrementItemQuantity(itemId: Long) = adjustItemQuantity(itemId = itemId, delta = 1)
+
+    fun decrementItemQuantity(itemId: Long) = adjustItemQuantity(itemId = itemId, delta = -1)
+
+    fun marketEstimateForItem(itemId: Long): ItemMarketValueUiState? =
+        itemMarketValuesState.value[itemId]
+
+    fun refreshMarketValueForItem(item: ItemEntity) {
+        val query = item.name.ifBlank { item.barcodeOrQr }.trim()
+        if (query.isBlank()) {
+            itemMarketValuesState.value = itemMarketValuesState.value + (
+                item.id to ItemMarketValueUiState(errorMessage = "Item needs a name or barcode.")
+            )
+            return
+        }
+        viewModelScope.launch {
+            val previousEstimate = itemMarketValuesState.value[item.id]?.estimate
+            itemMarketValuesState.value = itemMarketValuesState.value + (
+                item.id to ItemMarketValueUiState(
+                    isLoading = true,
+                    estimate = previousEstimate
+                )
+            )
+            val estimate = runCatching {
+                marketValueEstimator.estimateMarketValue(query)
+            }
+            itemMarketValuesState.value = itemMarketValuesState.value + (
+                item.id to estimate.fold(
+                    onSuccess = { value ->
+                        if (value == null) {
+                            ItemMarketValueUiState(errorMessage = "Not enough sold listings found.")
+                        } else {
+                            ItemMarketValueUiState(estimate = value)
+                        }
+                    },
+                    onFailure = { error ->
+                        ItemMarketValueUiState(
+                            errorMessage = error.message ?: "Unable to fetch market value."
+                        )
+                    }
+                )
+            )
+        }
     }
+
+    fun boxDetail(boxId: Long): Flow<BoxEntity?> =
+        repository.observeBoxWithItems(boxId).map { it?.box }
+
+    fun itemsForBox(boxId: Long): Flow<List<ItemEntity>> =
+        repository.observeItemsForBox(boxId)
 
     fun updateSearchQuery(query: String) {
         searchQueryState.value = query

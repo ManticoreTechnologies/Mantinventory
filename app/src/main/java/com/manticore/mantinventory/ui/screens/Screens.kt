@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -44,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -80,8 +82,11 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.manticore.mantinventory.data.BoxEntity
 import com.manticore.mantinventory.data.ItemEntity
+import com.manticore.mantinventory.ui.ItemMarketValueUiState
 import com.manticore.mantinventory.ui.AppViewModel
+import com.manticore.mantinventory.ui.InventoryStats
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -233,6 +238,7 @@ private fun HomeScreen(
     onScan: () -> Unit
 ) {
     val boxes by viewModel.boxes.collectAsStateWithLifecycle()
+    val stats by viewModel.stats.collectAsStateWithLifecycle()
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     var query by remember(ui.searchQuery) { mutableStateOf(ui.searchQuery) }
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
@@ -263,6 +269,9 @@ private fun HomeScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            item {
+                StatsOverviewCard(stats = stats)
+            }
             item {
                 OutlinedTextField(
                     value = query,
@@ -302,6 +311,33 @@ private fun HomeScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StatsOverviewCard(stats: InventoryStats) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            StatsPill(label = "Boxes", value = stats.totalBoxes.toString())
+            StatsPill(label = "Items", value = stats.totalItems.toString())
+            StatsPill(label = "Low stock", value = stats.lowStockItems.toString())
+        }
+    }
+}
+
+@Composable
+private fun StatsPill(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(text = label, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -356,17 +392,35 @@ private fun BoxDetailScreen(
     boxId: Long,
     onAddItem: () -> Unit
 ) {
-    val box by viewModel.boxDetail(boxId).collectAsStateWithLifecycle()
-    val items by viewModel.itemsForBox(boxId).collectAsStateWithLifecycle()
+    val boxStateFlow = remember(boxId) {
+        viewModel.boxDetail(boxId).map { box ->
+            if (box == null) {
+                BoxDetailUiState.NotFound
+            } else {
+                BoxDetailUiState.Loaded(box)
+            }
+        }
+    }
+    val itemsFlow = remember(boxId) { viewModel.itemsForBox(boxId) }
+    val boxState by boxStateFlow.collectAsStateWithLifecycle(initialValue = BoxDetailUiState.Loading)
+    val items by itemsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-
-    if (box == null) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Box not found")
+    val box = when (val state = boxState) {
+        BoxDetailUiState.Loading -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Loading box details…")
+            }
+            return
         }
-        return
+        BoxDetailUiState.NotFound -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Box not found")
+            }
+            return
+        }
+        is BoxDetailUiState.Loaded -> state.box
     }
 
     Scaffold(
@@ -385,15 +439,15 @@ private fun BoxDetailScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(box!!.name, style = MaterialTheme.typography.headlineSmall)
-            Text("Label code: ${box!!.labelCode}")
-            Text("Location: ${box!!.location.ifBlank { "Not set" }}")
-            Text("Description: ${box!!.description.ifBlank { "No description" }}")
-            Text("Created: ${formatDate(box!!.createdAt)}")
+            Text(box.name, style = MaterialTheme.typography.headlineSmall)
+            Text("Label code: ${box.labelCode}")
+            Text("Location: ${box.location.ifBlank { "Not set" }}")
+            Text("Description: ${box.description.ifBlank { "No description" }}")
+            Text("Created: ${formatDate(box.createdAt)}")
             LabelImageCard(
-                pngPath = box!!.labelPngPath,
+                pngPath = box.labelPngPath,
                 onShare = {
-                    val shared = shareLabel(context, box!!.labelPngPath)
+                    val shared = shareLabel(context, box.labelPngPath)
                     if (!shared) {
                         scope.launch { snackbar.showSnackbar("Label image not available.") }
                     }
@@ -405,10 +459,22 @@ private fun BoxDetailScreen(
                 fontWeight = FontWeight.Bold
             )
             items.forEach { item ->
-                ItemCard(item = item)
+                ItemCard(
+                    item = item,
+                    marketEstimate = viewModel.marketEstimateForItem(item.id),
+                    onIncrement = { viewModel.incrementItemQuantity(item.id) },
+                    onDecrement = { viewModel.decrementItemQuantity(item.id) },
+                    onEstimateMarketValue = { viewModel.refreshMarketValueForItem(item) }
+                )
             }
         }
     }
+}
+
+private sealed interface BoxDetailUiState {
+    data object Loading : BoxDetailUiState
+    data object NotFound : BoxDetailUiState
+    data class Loaded(val box: BoxEntity) : BoxDetailUiState
 }
 
 @Composable
@@ -449,16 +515,81 @@ private fun LabelImageCard(
 }
 
 @Composable
-private fun ItemCard(item: ItemEntity) {
+private fun ItemCard(
+    item: ItemEntity,
+    marketEstimate: ItemMarketValueUiState?,
+    onIncrement: () -> Unit,
+    onDecrement: () -> Unit,
+    onEstimateMarketValue: () -> Unit
+) {
+    LaunchedEffect(item.id, marketEstimate == null) {
+        if (marketEstimate == null) {
+            onEstimateMarketValue()
+        }
+    }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(14.dp)) {
             Text(item.name, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(4.dp))
             Text(item.description.ifBlank { "No description" })
             Text("Barcode/QR: ${item.barcodeOrQr.ifBlank { "Not set" }}")
-            Text("Qty: ${item.quantity}")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Qty: ${item.quantity}", modifier = Modifier.weight(1f))
+                IconButton(onClick = onDecrement, enabled = item.quantity > 1) {
+                    Icon(Icons.Default.Remove, contentDescription = "Decrease quantity")
+                }
+                IconButton(onClick = onIncrement) {
+                    Icon(Icons.Default.Add, contentDescription = "Increase quantity")
+                }
+            }
             Text("Low stock threshold: ${item.minimumStock}")
             Text("Updated: ${formatDate(item.updatedAt)}")
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(onClick = onEstimateMarketValue) {
+                Text("Refresh market value")
+            }
+            MarketValueSection(estimate = marketEstimate)
+        }
+    }
+}
+
+@Composable
+private fun MarketValueSection(estimate: ItemMarketValueUiState?) {
+    if (estimate == null) {
+        Text("Market value: not estimated yet.", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    when {
+        estimate.isLoading -> {
+            Text("Market value: fetching latest sold comps…", style = MaterialTheme.typography.bodySmall)
+        }
+        !estimate.errorMessage.isNullOrBlank() -> {
+            Text(
+                "Market value unavailable: ${estimate.errorMessage}",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        else -> {
+            val resolved = estimate.estimate ?: run {
+                Text("Market value unavailable.", style = MaterialTheme.typography.bodySmall)
+                return
+            }
+            val median = formatMoney(resolved.medianPrice, resolved.currencyCode)
+            val low = formatMoney(resolved.minPrice, resolved.currencyCode)
+            val high = formatMoney(resolved.maxPrice, resolved.currencyCode)
+            Text(
+                "Market value (sold): median $median | range $low - $high (${resolved.sampleCount} comps)",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "Source: ${resolved.source}",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
@@ -737,4 +868,8 @@ private fun shareLabel(context: Context, labelPath: String): Boolean {
 
 private fun formatDate(epochMillis: Long): String {
     return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(epochMillis))
+}
+
+private fun formatMoney(value: Double, currencyCode: String): String {
+    return "$currencyCode " + String.format(Locale.US, "%.2f", value)
 }
