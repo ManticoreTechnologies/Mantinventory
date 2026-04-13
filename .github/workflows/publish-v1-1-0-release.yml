@@ -1,0 +1,29 @@
+name: Publish v1.1.0 Release
+
+on:
+  push:
+    branches:
+      - cursor/fix-box-details-flicker-1c6e
+    paths:
+      - releases/mantinventory-v1.1.0-unsigned.apk
+      - .github/workflows/publish-v1-1-0-release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create or update release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view v1.1.0 >/dev/null 2>&1; then
+            gh release upload v1.1.0 releases/mantinventory-v1.1.0-unsigned.apk --clobber
+          else
+            gh release create v1.1.0 releases/mantinventory-v1.1.0-unsigned.apk --title "v1.1.0" --notes "Mantinventory v1.1.0 release APK."
+          fi
